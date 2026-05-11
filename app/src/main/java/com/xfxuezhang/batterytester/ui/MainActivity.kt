@@ -20,6 +20,7 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.ScrollView
@@ -289,7 +290,7 @@ class MainActivity : ComponentActivity() {
         root.addView(chartCard(cpuLoadChart))
         root.addView(chartCard(networkDownloadedChart))
 
-        setContentView(scroll(root))
+        setContentView(detailContentView(root, sessionId))
 
         refreshJob = uiScope.launch {
             while (isActive) {
@@ -307,7 +308,7 @@ class MainActivity : ComponentActivity() {
                     showDetail(sessionId)
                     return@launch
                 }
-                sessionText.text = session.toDetailText()
+                sessionText.text = session.toDetailText(samples)
                 summaryText.text = samples.summaryText(session)
                 levelChart.setData(samples, ChartMetric.LEVEL)
                 currentChart.setData(samples, ChartMetric.CURRENT)
@@ -833,6 +834,27 @@ class MainActivity : ComponentActivity() {
         ViewCompat.requestApplyInsets(this)
     }
 
+    private fun detailContentView(root: LinearLayout, sessionId: String): View {
+        val content = scroll(root)
+        if (!shouldShowGpuLoad(sessionId)) return content
+
+        return FrameLayout(this).apply {
+            setBackgroundColor(color("#F7FAFC"))
+            addView(GpuLoadView(this@MainActivity).apply {
+                alpha = 0.22f
+                layoutParams = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+                )
+                isClickable = false
+            })
+            addView(content, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ))
+        }
+    }
+
     private fun verticalRoot(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(16), dp(16), dp(16), dp(28))
@@ -1040,7 +1062,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun BatterySession.toDetailText(): String {
+    private fun BatterySession.toDetailText(samples: List<BatterySample> = emptyList()): String {
+        val latestLevel = samples.lastOrNull { it.levelPercent != null }?.levelPercent
+        val displayEndLevel = endLevel ?: latestLevel
         return buildString {
             appendLine("模式：${mode.displayName()}")
             appendLine("开始时间：${TIME.format(Date(startTime))}")
@@ -1048,7 +1072,7 @@ class MainActivity : ComponentActivity() {
             appendLine("停止原因：${stopReason?.displayName() ?: "--"}")
             appendLine("设备：$manufacturer $deviceModel")
             appendLine("Android：$androidVersion")
-            append("电量：${startLevel?.let { "$it%" } ?: "--"} → ${endLevel?.let { "$it%" } ?: "--"}")
+            append("电量：${startLevel?.let { "$it%" } ?: "--"} → ${displayEndLevel?.let { "$it%" } ?: "--"}")
         }
     }
 

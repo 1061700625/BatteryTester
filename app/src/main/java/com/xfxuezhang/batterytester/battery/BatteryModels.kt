@@ -81,7 +81,7 @@ data class DischargeConfig(
     val stopAtBatteryPercent: Int = 15,
     val stopAtTempC: Double = 48.0,
     val maxDurationMinutes: Int = 60,
-    val highLoadRatio: Float = 0.92f,
+    val highLoadRatio: Float = 0.95f,
     val mediumLoadRatio: Float = 0.75f,
     val lowLoadRatio: Float = 0.45f,
     val coolDownLoadRatio: Float = 0.20f

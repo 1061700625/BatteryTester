@@ -1,12 +1,19 @@
 package com.xfxuezhang.batterytester.load
 
+import android.os.Process
+import android.os.SystemClock
 import java.io.File
 import kotlin.math.roundToInt
 
 class CpuUsageSampler {
     private var previous: CpuTicks? = null
+    private var previousProcess: ProcessTicks? = null
 
     fun samplePercent(): Double? {
+        return sampleSystemCpuPercent() ?: sampleProcessCpuPercent()
+    }
+
+    private fun sampleSystemCpuPercent(): Double? {
         val current = readCpuTicks() ?: return null
         val last = previous
         previous = current
@@ -18,6 +25,23 @@ class CpuUsageSampler {
 
         val busy = (totalDelta - idleDelta).coerceAtLeast(0L)
         return (busy.toDouble() * 100.0 / totalDelta.toDouble()).coerceIn(0.0, 100.0)
+    }
+
+    private fun sampleProcessCpuPercent(): Double? {
+        val nowMs = SystemClock.elapsedRealtime()
+        val cpuMs = Process.getElapsedCpuTime()
+        val current = ProcessTicks(wallMs = nowMs, cpuMs = cpuMs)
+        val last = previousProcess
+        previousProcess = current
+        if (last == null) return null
+
+        val wallDelta = current.wallMs - last.wallMs
+        val cpuDelta = current.cpuMs - last.cpuMs
+        if (wallDelta <= 0L || cpuDelta < 0L) return null
+
+        val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+        return (cpuDelta.toDouble() * 100.0 / (wallDelta.toDouble() * cores.toDouble()))
+            .coerceIn(0.0, 100.0)
     }
 
     private fun readCpuTicks(): CpuTicks? {
@@ -44,6 +68,11 @@ class CpuUsageSampler {
     private data class CpuTicks(
         val total: Long,
         val idleAll: Long
+    )
+
+    private data class ProcessTicks(
+        val wallMs: Long,
+        val cpuMs: Long
     )
 }
 

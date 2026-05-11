@@ -47,7 +47,7 @@ class CpuBurner {
 
         while (jobs.size < desiredWorkers) {
             jobs += scope.launch(Dispatchers.Default) {
-                Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+                Process.setThreadPriority(Process.THREAD_PRIORITY_DEFAULT + 2)
                 burnLoop()
             }
         }
@@ -68,7 +68,7 @@ class CpuBurner {
         var x = 0.123456789
         while (kotlinx.coroutines.currentCoroutineContext().isActive) {
             val busyStartNs = System.nanoTime()
-            repeat(220_000) {
+            repeat(320_000) {
                 x = sin(x) * cos(x) + sqrt(abs(x) + 0.000001)
             }
 
