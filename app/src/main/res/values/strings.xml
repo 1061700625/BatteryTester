@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Battery Tester</string>
+    <string name="notification_channel_name">电池测试</string>
+</resources>
