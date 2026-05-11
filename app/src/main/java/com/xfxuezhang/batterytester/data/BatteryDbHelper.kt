@@ -53,6 +53,8 @@ class BatteryDbHelper(context: Context) : SQLiteOpenHelper(
                 plugged INTEGER,
                 thermal_status INTEGER,
                 is_power_save_mode INTEGER,
+                cpu_usage_percent REAL,
+                cpu_load_target_percent REAL,
                 FOREIGN KEY(session_id) REFERENCES battery_session(id) ON DELETE CASCADE
             )
             """.trimIndent()
@@ -190,6 +192,8 @@ class BatteryDbHelper(context: Context) : SQLiteOpenHelper(
         putNullable("plugged", plugged)
         putNullable("thermal_status", thermalStatus)
         putNullable("is_power_save_mode", isPowerSaveMode?.let { if (it) 1 else 0 })
+        putNullable("cpu_usage_percent", cpuUsagePercent)
+        putNullable("cpu_load_target_percent", cpuLoadTargetPercent)
     }
 
     private fun BatterySnapshot.toSample(sessionId: String): BatterySample = BatterySample(
@@ -206,7 +210,9 @@ class BatteryDbHelper(context: Context) : SQLiteOpenHelper(
         status = status,
         plugged = plugged,
         thermalStatus = thermalStatus,
-        isPowerSaveMode = isPowerSaveMode
+        isPowerSaveMode = isPowerSaveMode,
+        cpuUsagePercent = cpuUsagePercent,
+        cpuLoadTargetPercent = cpuLoadTargetPercent
     )
 
     private fun Cursor.toSession(): BatterySession {
@@ -243,7 +249,9 @@ class BatteryDbHelper(context: Context) : SQLiteOpenHelper(
             status = nullableInt("status"),
             plugged = nullableInt("plugged"),
             thermalStatus = nullableInt("thermal_status"),
-            isPowerSaveMode = nullableInt("is_power_save_mode")?.let { it == 1 }
+            isPowerSaveMode = nullableInt("is_power_save_mode")?.let { it == 1 },
+            cpuUsagePercent = nullableDouble("cpu_usage_percent"),
+            cpuLoadTargetPercent = nullableDouble("cpu_load_target_percent")
         )
     }
 
@@ -260,6 +268,6 @@ class BatteryDbHelper(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "battery_tester.db"
-        private const val DATABASE_VERSION = 1
+        private const val DATABASE_VERSION = 2
     }
 }

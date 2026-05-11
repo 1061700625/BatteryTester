@@ -5,7 +5,9 @@ import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
@@ -58,6 +60,8 @@ class MainActivity : ComponentActivity() {
         repository = BatteryRepository.get(this)
         sampler = BatterySampler(this)
         requestNotificationPermissionIfNeeded()
+        window.statusBarColor = color("#F7FAFC")
+        window.navigationBarColor = color("#F7FAFC")
         showHome()
     }
 
@@ -92,8 +96,7 @@ class MainActivity : ComponentActivity() {
         refreshJob?.cancel()
 
         val root = verticalRoot()
-        root.addView(title("Battery Tester"))
-        root.addView(body("用户主动启动的电池性能测试辅助工具。App 不会在后台自动启动放电测试；测试期间通知栏可见，并且可随时停止。部分机型不支持的指标会保持空值。"))
+        root.addView(heroHeader())
 
         val statusCard = card()
         val statusText = body("正在读取电池状态...")
@@ -117,16 +120,18 @@ class MainActivity : ComponentActivity() {
 
         val actionCard = card()
         actionCard.addView(sectionTitle("测试入口"))
-        actionCard.addView(primaryButton("开始放电测试") { confirmStartDischarge() })
+        actionCard.addView(body("选择测试模式后，应用会保持当前测试页常亮，采样曲线会持续写入本地数据库。"))
+        actionCard.addView(space(12))
+        actionCard.addView(primaryButton("⚡ 开始放电测试") { confirmStartDischarge() })
         actionCard.addView(space(10))
-        actionCard.addView(primaryButton("开始充电记录") { confirmStartChargeRecord() })
+        actionCard.addView(accentButton("🔌 开始充电记录") { confirmStartChargeRecord() })
         actionCard.addView(space(10))
-        actionCard.addView(secondaryButton("查看历史曲线") { showHistory() })
+        actionCard.addView(secondaryButton("📈 查看历史曲线") { showHistory() })
         root.addView(actionCard)
 
         val safetyCard = card()
         safetyCard.addView(sectionTitle("安全策略"))
-        safetyCard.addView(body("放电测试默认使用中等 CPU 负载。电量低于 15%、电池温度达到 48℃、或系统热状态达到严重级别时会自动停止。温度达到 43℃ 或系统热状态达到中等级别时会降低负载。"))
+        safetyCard.addView(body("放电测试会按温度自动调整 CPU 负载：低温使用约 92% 高负载，避免 100% 满载导致界面刷新卡顿；中温降到中/低负载，接近高温阈值进入冷却负载。电量低于 15%、电池温度达到 48℃、或系统热状态达到严重级别时会自动停止。"))
         root.addView(safetyCard)
 
         setContentView(scroll(root))
@@ -137,8 +142,9 @@ class MainActivity : ComponentActivity() {
                 val snapshot = withContext(Dispatchers.Default) { sampler.sample() }
                 if (capabilitySamples.size < 5) capabilitySamples += snapshot
                 val activeSession = withContext(Dispatchers.IO) { repository.getActiveSession() }
+                val latestActiveSample = activeSession?.let { withContext(Dispatchers.IO) { repository.getLatestSample(it.id) } }
                 statusText.text = snapshot.toDisplayText()
-                activeText.text = activeSession?.toActiveDisplayText() ?: "没有正在运行的测试。"
+                activeText.text = activeSession?.toActiveDisplayText(latestActiveSample) ?: "没有正在运行的测试。"
                 stopButton.visibility = if (activeSession != null) View.VISIBLE else View.GONE
                 capabilityText.text = BatteryCapability.fromSamples(capabilitySamples).toDisplayText()
                 applyScreenLoadIfNeeded(activeSession)
@@ -155,6 +161,7 @@ class MainActivity : ComponentActivity() {
 
         val root = verticalRoot()
         root.addView(title("历史记录"))
+        root.addView(space(8))
         root.addView(secondaryButton("返回首页") { showHome() })
         root.addView(space(12))
 
@@ -171,6 +178,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         setContentView(scroll(root))
+        applyScreenLoadIfNeeded()
     }
 
     private fun showDetail(sessionId: String) {
@@ -181,6 +189,7 @@ class MainActivity : ComponentActivity() {
 
         val root = verticalRoot()
         root.addView(title("测试详情"))
+        root.addView(space(8))
         root.addView(secondaryButton("返回历史记录") { showHistory() })
         root.addView(space(12))
 
@@ -199,12 +208,16 @@ class MainActivity : ComponentActivity() {
         val tempChart = chartView()
         val voltageChart = chartView()
         val powerChart = chartView()
+        val cpuUsageChart = chartView()
+        val cpuLoadChart = chartView()
 
         root.addView(chartCard(levelChart))
         root.addView(chartCard(currentChart))
         root.addView(chartCard(tempChart))
         root.addView(chartCard(voltageChart))
         root.addView(chartCard(powerChart))
+        root.addView(chartCard(cpuUsageChart))
+        root.addView(chartCard(cpuLoadChart))
 
         setContentView(scroll(root))
 
@@ -212,6 +225,8 @@ class MainActivity : ComponentActivity() {
             while (isActive) {
                 val session = withContext(Dispatchers.IO) { repository.getSession(sessionId) }
                 val samples = withContext(Dispatchers.IO) { repository.getSamples(sessionId) }
+                val activeSession = withContext(Dispatchers.IO) { repository.getActiveSession() }
+                applyScreenLoadIfNeeded(activeSession)
                 if (session == null) {
                     sessionText.text = "正在等待测试记录创建..."
                     delay(500)
@@ -224,6 +239,8 @@ class MainActivity : ComponentActivity() {
                 tempChart.setData(samples, ChartMetric.TEMPERATURE)
                 voltageChart.setData(samples, ChartMetric.VOLTAGE)
                 powerChart.setData(samples, ChartMetric.POWER)
+                cpuUsageChart.setData(samples, ChartMetric.CPU_USAGE)
+                cpuLoadChart.setData(samples, ChartMetric.CPU_LOAD_TARGET)
                 delay(if (session.endTime == null) 1500 else 5000)
             }
         }
@@ -232,7 +249,7 @@ class MainActivity : ComponentActivity() {
     private fun confirmStartDischarge() {
         AlertDialog.Builder(this)
             .setTitle("开始放电测试")
-            .setMessage("放电测试会提高屏幕亮度并启动计算负载，以加快耗电速度。测试过程中设备可能发热。你可以随时在页面或通知栏停止测试。建议在 20% 以上电量开始。")
+            .setMessage("放电测试会提高屏幕亮度并启动计算负载，以加快耗电速度。温度较低时会使用约 92% 高负载，不再占满 100%，以减少界面刷新卡顿；温度升高后会自动降负载，接近高温阈值时会进入冷却负载。你可以随时在页面或通知栏停止测试。建议在 20% 以上电量开始。")
             .setPositiveButton("开始") { _, _ -> startTest(BatteryMode.DISCHARGE) }
             .setNegativeButton("取消", null)
             .show()
@@ -250,8 +267,8 @@ class MainActivity : ComponentActivity() {
     private fun startTest(mode: BatteryMode) {
         val sessionId = UUID.randomUUID().toString()
         ContextCompat.startForegroundService(this, BatteryTestService.startIntent(this, mode, sessionId))
-        if (mode == BatteryMode.DISCHARGE) applyScreenLoadIfNeeded()
-        Toast.makeText(this, "测试已启动", Toast.LENGTH_SHORT).show()
+        keepScreenAwakeImmediately(mode)
+        Toast.makeText(this, "测试已启动，运行期间将保持屏幕常亮", Toast.LENGTH_SHORT).show()
         showDetail(sessionId)
     }
 
@@ -281,15 +298,31 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun applyScreenLoadIfNeeded(activeSession: BatterySession? = repository.getActiveSession()) {
-        if (activeSession?.mode != BatteryMode.DISCHARGE) {
-            clearScreenLoad()
-            return
-        }
+    private fun keepScreenAwakeImmediately(mode: BatteryMode) {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val attrs = window.attributes
         if (originalBrightness == null) originalBrightness = attrs.screenBrightness
-        attrs.screenBrightness = 1.0f
+        if (mode == BatteryMode.DISCHARGE) attrs.screenBrightness = 1.0f
+        window.attributes = attrs
+    }
+
+    private fun applyScreenLoadIfNeeded(activeSession: BatterySession? = repository.getActiveSession()) {
+        if (activeSession == null) {
+            clearScreenLoad()
+            return
+        }
+
+        // 测试运行期间保持屏幕常亮。Android 官方建议在 Activity 中使用 FLAG_KEEP_SCREEN_ON。
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        val attrs = window.attributes
+        if (originalBrightness == null) originalBrightness = attrs.screenBrightness
+
+        if (activeSession.mode == BatteryMode.DISCHARGE) {
+            attrs.screenBrightness = 1.0f
+        } else {
+            originalBrightness?.let { attrs.screenBrightness = it }
+        }
         window.attributes = attrs
     }
 
@@ -304,24 +337,59 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun scroll(root: LinearLayout): ScrollView = ScrollView(this).apply {
-        setBackgroundColor(color("#F7F8FA"))
+        setBackgroundColor(color("#F7FAFC"))
         addView(root)
     }
 
     private fun verticalRoot(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        setPadding(dp(16), dp(18), dp(16), dp(28))
+        setPadding(dp(16), dp(16), dp(16), dp(28))
+    }
+
+    private fun heroHeader(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(18), dp(18), dp(18), dp(16))
+        background = roundedBackground("#EAF4FF", dp(16), strokeColor = "#D7EAFE", strokeWidth = 1)
+        elevation = dp(2).toFloat()
+        layoutParams = blockLayout(bottom = 12)
+
+        addView(label("作者：小锋学长生活大爆炸", "#0F766E", "#DDF7F0"))
+        addView(space(10))
+        addView(TextView(this@MainActivity).apply {
+            text = "充放电监测助手"
+            textSize = 28f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(color("#0F172A"))
+            setPadding(0, 0, 0, dp(4))
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = "快速放电、充电曲线、温度与电流采样，一站式记录手机电池表现。"
+            textSize = 14f
+            setLineSpacing(4f, 1.06f)
+            setTextColor(color("#475569"))
+        })
+        addView(space(12))
+        val chips = LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.START
+        }
+        chips.addView(label("实时曲线", "#0369A1", "#DDF3FF"))
+        chips.addView(spaceWidth(8))
+        chips.addView(label("温控负载", "#7C2D12", "#FFEDD5"))
+        chips.addView(spaceWidth(8))
+        chips.addView(label("CPU 监测", "#5B21B6", "#EDE9FE"))
+        addView(chips)
     }
 
     private fun card(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
         setPadding(dp(16), dp(14), dp(16), dp(14))
-        setBackgroundColor(color("#FFFFFF"))
-        val lp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-        lp.setMargins(0, 0, 0, dp(12))
-        layoutParams = lp
+        background = roundedBackground("#FFFFFF", dp(14), strokeColor = "#EEF2F7", strokeWidth = 1)
+        layoutParams = blockLayout(bottom = 10)
         elevation = dp(2).toFloat()
+        translationZ = dp(1).toFloat()
     }
+
 
     private fun chartCard(chart: ChartView): LinearLayout = card().apply {
         addView(chart)
@@ -335,37 +403,84 @@ class MainActivity : ComponentActivity() {
         this.text = text
         textSize = 28f
         typeface = Typeface.DEFAULT_BOLD
-        setTextColor(color("#111827"))
-        setPadding(0, 0, 0, dp(12))
+        setTextColor(color("#0F172A"))
+        setPadding(0, 0, 0, dp(4))
+    }
+
+    private fun subtitle(text: String): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 13f
+        setTextColor(color("#64748B"))
     }
 
     private fun sectionTitle(text: String): TextView = TextView(this).apply {
         this.text = text
-        textSize = 18f
+        textSize = 16f
         typeface = Typeface.DEFAULT_BOLD
-        setTextColor(color("#111827"))
+        setTextColor(color("#1E293B"))
         setPadding(0, 0, 0, dp(8))
     }
 
     private fun body(text: String): TextView = TextView(this).apply {
         this.text = text
-        textSize = 15f
-        setLineSpacing(3f, 1.08f)
-        setTextColor(color("#4B5563"))
+        textSize = 14f
+        setLineSpacing(4f, 1.08f)
+        setTextColor(color("#475569"))
     }
 
-    private fun primaryButton(text: String, onClick: () -> Unit): Button = Button(this).apply {
+    private fun label(text: String, textColor: String, bgColor: String = "#22FFFFFF"): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 12f
+        typeface = Typeface.DEFAULT_BOLD
+        setTextColor(color(textColor))
+        setPadding(dp(10), dp(5), dp(10), dp(5))
+        background = roundedBackground(bgColor, dp(999))
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+    }
+
+    private fun primaryButton(text: String, onClick: () -> Unit): Button = styledButton(text, "#DDF3FF", "#0369A1", onClick)
+
+    private fun accentButton(text: String, onClick: () -> Unit): Button = styledButton(text, "#EDE9FE", "#5B21B6", onClick)
+
+    private fun secondaryButton(text: String, onClick: () -> Unit): Button = styledButton(text, "#F1F5F9", "#334155", onClick)
+
+    private fun styledButton(text: String, bgColor: String, textColor: String, onClick: () -> Unit): Button = Button(this).apply {
         this.text = text
         isAllCaps = false
         gravity = Gravity.CENTER
+        typeface = Typeface.DEFAULT_BOLD
+        setTextColor(color(textColor))
+        background = roundedBackground(bgColor, dp(12))
+        setPadding(dp(12), dp(10), dp(12), dp(10))
         setOnClickListener { onClick() }
-        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(48))
+        stateListAnimator = null
     }
 
-    private fun secondaryButton(text: String, onClick: () -> Unit): Button = primaryButton(text, onClick)
+    private fun roundedBackground(
+        fillColor: String,
+        radius: Int,
+        strokeColor: String? = null,
+        strokeWidth: Int = 0
+    ): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = radius.toFloat()
+        setColor(color(fillColor))
+        if (strokeColor != null && strokeWidth > 0) setStroke(dp(strokeWidth), color(strokeColor))
+    }
+
+    private fun blockLayout(bottom: Int): LinearLayout.LayoutParams {
+        return LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            setMargins(0, 0, 0, dp(bottom))
+        }
+    }
 
     private fun space(heightDp: Int): View = View(this).apply {
         layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(heightDp))
+    }
+
+    private fun spaceWidth(widthDp: Int): View = View(this).apply {
+        layoutParams = LinearLayout.LayoutParams(dp(widthDp), 1)
     }
 
     private fun Context.dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
@@ -382,16 +497,23 @@ class MainActivity : ComponentActivity() {
             appendLine("剩余容量：${chargeCounterMah?.let { "%.0f mAh".format(it) } ?: "不可用"}")
             appendLine("电压：${voltageV?.let { "%.3f V".format(it) } ?: "不可用"}")
             appendLine("温度：${temperatureC?.let { "%.1f ℃".format(it) } ?: "不可用"}")
+            appendLine("CPU 使用率：${cpuUsagePercent.formatPercent()}")
+            appendLine("负载目标：${cpuLoadTargetPercent.formatPercent()}")
             appendLine("充电状态：${status.statusText()}")
             append("接入状态：${plugged.pluggedText()}")
         }
     }
 
-    private fun BatterySession.toActiveDisplayText(): String {
+    private fun BatterySession.toActiveDisplayText(latestSample: BatterySample?): String {
         return buildString {
             appendLine("正在运行：${mode.displayName()}")
             appendLine("启动时间：${TIME.format(Date(startTime))}")
             appendLine("设备：$manufacturer $deviceModel")
+            if (latestSample != null) {
+                appendLine("温度：${latestSample.temperatureC?.let { "%.1f ℃".format(it) } ?: "不可用"}")
+                appendLine("CPU 使用率：${latestSample.cpuUsagePercent.formatPercent()}")
+                appendLine("负载目标：${latestSample.cpuLoadTargetPercent.formatPercent()}")
+            }
             append("启动方式：用户点击")
         }
     }
@@ -428,6 +550,9 @@ class MainActivity : ComponentActivity() {
         val startLevel = firstOrNull { it.levelPercent != null }?.levelPercent
         val endLevel = lastOrNull { it.levelPercent != null }?.levelPercent
         val levelDelta = if (startLevel != null && endLevel != null) endLevel - startLevel else null
+        val avgCpu = mapNotNull { it.cpuUsagePercent }.takeIf { it.isNotEmpty() }?.average()
+        val maxCpu = mapNotNull { it.cpuUsagePercent }.maxOrNull()
+        val avgTarget = mapNotNull { it.cpuLoadTargetPercent }.takeIf { it.isNotEmpty() }?.average()
         return buildString {
             appendLine("采样点：${size}")
             appendLine("时长：${durationSeconds}s")
@@ -435,7 +560,10 @@ class MainActivity : ComponentActivity() {
             appendLine("平均瞬时电流：${avgCurrent.formatMa()}")
             appendLine("最大绝对电流：${maxAbsCurrent.formatMa()}")
             appendLine("最高温度：${maxTemp?.let { "%.1f ℃".format(it) } ?: "不可用"}")
-            append("温升：${if (startTemp != null && maxTemp != null) "%.1f ℃".format(maxTemp - startTemp) else "不可用"}")
+            appendLine("温升：${if (startTemp != null && maxTemp != null) "%.1f ℃".format(maxTemp - startTemp) else "不可用"}")
+            appendLine("平均 CPU 使用率：${avgCpu.formatPercent()}")
+            appendLine("最高 CPU 使用率：${maxCpu.formatPercent()}")
+            append("平均负载目标：${avgTarget.formatPercent()}")
         }
     }
 
@@ -487,6 +615,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun Double?.formatMa(): String = this?.let { "%.0f mA".format(it) } ?: "不可用"
+    private fun Double?.formatPercent(): String = this?.let { "%.1f%%".format(it) } ?: "不可用"
 
     private enum class Screen { HOME, HISTORY, DETAIL }
 

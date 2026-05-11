@@ -6,14 +6,16 @@ import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.Build
 import android.os.PowerManager
+import com.xfxuezhang.batterytester.load.CpuUsageSampler
 import kotlin.math.roundToInt
 
 class BatterySampler(private val context: Context) {
     private val appContext = context.applicationContext
     private val batteryManager = appContext.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
     private val powerManager = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+    private val cpuUsageSampler = CpuUsageSampler()
 
-    fun sample(): BatterySnapshot {
+    fun sample(cpuLoadTargetPercent: Double? = null): BatterySnapshot {
         val intent = appContext.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
 
         val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, INVALID_INT)
@@ -40,7 +42,9 @@ class BatterySampler(private val context: Context) {
             } else {
                 null
             },
-            isPowerSaveMode = powerManager.isPowerSaveMode
+            isPowerSaveMode = powerManager.isPowerSaveMode,
+            cpuUsagePercent = cpuUsageSampler.samplePercent(),
+            cpuLoadTargetPercent = cpuLoadTargetPercent
         )
     }
 

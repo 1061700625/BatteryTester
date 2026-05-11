@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">Battery Tester</string>
-    <string name="notification_channel_name">电池测试</string>
+    <string name="app_name">充放电监测助手</string>
+    <string name="notification_channel_name">充放电监测</string>
 </resources>

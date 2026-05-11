@@ -8,7 +8,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -41,7 +40,6 @@ class BatteryTestService : Service() {
     private var currentSessionId: String? = null
     private var currentMode: BatteryMode? = null
     private var sessionFinished = false
-    private var loadReduced = false
     private val config = DischargeConfig()
 
     override fun onCreate() {
@@ -80,44 +78,54 @@ class BatteryTestService : Service() {
         repository.closeActiveAsReplaced()
         stopRunningLoopOnly()
 
-        val firstSnapshot = sampler.sample()
+        val probeSnapshot = sampler.sample()
+        if (mode == BatteryMode.DISCHARGE) {
+            cpuBurner.setTargetLoad(serviceScope, loadRatioFor(probeSnapshot.temperatureC, probeSnapshot.thermalStatus))
+        }
+
+        val firstSnapshot = probeSnapshot.copy(
+            cpuLoadTargetPercent = if (mode == BatteryMode.DISCHARGE) cpuBurner.currentTargetPercent else null
+        )
         repository.insertSession(firstSnapshot.toSession(sessionId, mode, source, APP_VERSION))
         repository.insertSample(sessionId, firstSnapshot)
 
         currentSessionId = sessionId
         currentMode = mode
         sessionFinished = false
-        loadReduced = false
 
         startInForeground(mode, firstSnapshot.levelPercent, firstSnapshot.temperatureC)
-
-        if (mode == BatteryMode.DISCHARGE) {
-            cpuBurner.start(serviceScope, config.cpuLoadRatio)
-        }
+        updateNotification(mode, firstSnapshot)
 
         sampleJob = serviceScope.launch {
             val startMs = System.currentTimeMillis()
             while (isActive) {
                 delay(config.sampleIntervalMs)
-                val snapshot = sampler.sample()
+
+                val targetBeforeSample = if (mode == BatteryMode.DISCHARGE) cpuBurner.currentTargetPercent else null
+                val snapshot = sampler.sample(targetBeforeSample)
                 repository.insertSample(sessionId, snapshot)
-                updateNotification(mode, snapshot.levelPercent, snapshot.temperatureC, snapshot.currentNowMa)
 
                 if (mode == BatteryMode.DISCHARGE) {
-                    if (!loadReduced && shouldReduceLoad(snapshot.temperatureC, snapshot.thermalStatus)) {
-                        cpuBurner.reduce(this)
-                        loadReduced = true
-                    }
                     val reason = stopReasonForDischarge(snapshot.levelPercent, snapshot.temperatureC, snapshot.thermalStatus)
                     if (reason != null) {
+                        updateNotification(mode, snapshot)
                         stopTest(reason)
                         break
                     }
+
+                    val nextLoadRatio = loadRatioFor(snapshot.temperatureC, snapshot.thermalStatus)
+                    if (kotlin.math.abs(cpuBurner.currentTargetRatio - nextLoadRatio) >= 0.01f) {
+                        cpuBurner.setTargetLoad(this, nextLoadRatio)
+                    }
+
                     if (System.currentTimeMillis() - startMs >= config.maxDurationMinutes * 60_000L) {
+                        updateNotification(mode, snapshot)
                         stopTest(StopReason.MAX_DURATION_REACHED)
                         break
                     }
                 }
+
+                updateNotification(mode, snapshot)
             }
         }
     }
@@ -143,18 +151,27 @@ class BatteryTestService : Service() {
     private fun finishSession(reason: StopReason) {
         val id = currentSessionId ?: return
         if (sessionFinished) return
-        val snapshot = sampler.sample()
+        val snapshot = sampler.sample(if (currentMode == BatteryMode.DISCHARGE) cpuBurner.currentTargetPercent else null)
         repository.insertSample(id, snapshot)
         repository.finishSession(id, snapshot.levelPercent, reason)
         sessionFinished = true
     }
 
-    private fun shouldReduceLoad(tempC: Double?, thermalStatus: Int?): Boolean {
-        val hot = tempC != null && tempC >= config.reduceLoadAtTempC
-        val thermalModerate = thermalStatus != null &&
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-            thermalStatus >= PowerManager.THERMAL_STATUS_MODERATE
-        return hot || thermalModerate
+    private fun loadRatioFor(tempC: Double?, thermalStatus: Int?): Float {
+        if (thermalStatus != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (thermalStatus >= PowerManager.THERMAL_STATUS_SEVERE) return config.coolDownLoadRatio
+            if (thermalStatus >= PowerManager.THERMAL_STATUS_MODERATE) return config.lowLoadRatio
+            if (thermalStatus >= PowerManager.THERMAL_STATUS_LIGHT) return config.mediumLoadRatio
+        }
+
+        return when {
+            tempC == null -> config.mediumLoadRatio
+            tempC < config.highLoadBelowTempC -> config.highLoadRatio
+            tempC < config.mediumLoadBelowTempC -> config.mediumLoadRatio
+            tempC < config.lowLoadBelowTempC -> config.lowLoadRatio
+            tempC < config.stopAtTempC -> config.coolDownLoadRatio
+            else -> 0f
+        }
     }
 
     private fun stopReasonForDischarge(level: Int?, tempC: Double?, thermalStatus: Int?): StopReason? {
@@ -167,7 +184,7 @@ class BatteryTestService : Service() {
     }
 
     private fun startInForeground(mode: BatteryMode, level: Int?, tempC: Double?) {
-        val notification = buildNotification(mode, level, tempC, null)
+        val notification = buildNotification(mode, level, tempC, null, null, null)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             ServiceCompat.startForeground(
                 this,
@@ -180,15 +197,39 @@ class BatteryTestService : Service() {
         }
     }
 
-    private fun updateNotification(mode: BatteryMode, level: Int?, tempC: Double?, currentMa: Double?) {
+    private fun updateNotification(mode: BatteryMode, snapshot: com.xfxuezhang.batterytester.battery.BatterySnapshot) {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(NOTIFICATION_ID, buildNotification(mode, level, tempC, currentMa))
+        manager.notify(
+            NOTIFICATION_ID,
+            buildNotification(
+                mode = mode,
+                level = snapshot.levelPercent,
+                tempC = snapshot.temperatureC,
+                currentMa = snapshot.currentNowMa,
+                cpuUsagePercent = snapshot.cpuUsagePercent,
+                cpuLoadTargetPercent = if (mode == BatteryMode.DISCHARGE) cpuBurner.currentTargetPercent else null
+            )
+        )
     }
 
-    private fun buildNotification(mode: BatteryMode, level: Int?, tempC: Double?, currentMa: Double?): Notification {
+    private fun buildNotification(
+        mode: BatteryMode,
+        level: Int?,
+        tempC: Double?,
+        currentMa: Double?,
+        cpuUsagePercent: Double?,
+        cpuLoadTargetPercent: Double?
+    ): Notification {
         val title = if (mode == BatteryMode.DISCHARGE) "正在进行放电测试" else "正在记录充电曲线"
         val current = currentMa?.let { String.format("%.0f mA", it) } ?: "电流不可用"
-        val content = "电量 ${level?.let { "$it%" } ?: "--"}，温度 ${tempC?.let { String.format("%.1f℃", it) } ?: "--"}，$current"
+        val cpuText = if (mode == BatteryMode.DISCHARGE) {
+            val usage = cpuUsagePercent?.let { String.format("%.1f%%", it) } ?: "--"
+            val target = cpuLoadTargetPercent?.let { String.format("%.0f%%", it) } ?: "--"
+            "，CPU $usage，负载目标 $target"
+        } else {
+            ""
+        }
+        val content = "电量 ${level?.let { "$it%" } ?: "--"}，温度 ${tempC?.let { String.format("%.1f℃", it) } ?: "--"}，$current$cpuText"
         val stopIntent = Intent(this, BatteryTestService::class.java).apply { action = ACTION_STOP }
         val stopPendingIntent = PendingIntent.getService(
             this,

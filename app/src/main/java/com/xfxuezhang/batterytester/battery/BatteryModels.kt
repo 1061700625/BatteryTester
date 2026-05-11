@@ -42,7 +42,9 @@ data class BatterySnapshot(
     val status: Int?,
     val plugged: Int?,
     val thermalStatus: Int?,
-    val isPowerSaveMode: Boolean?
+    val isPowerSaveMode: Boolean?,
+    val cpuUsagePercent: Double?,
+    val cpuLoadTargetPercent: Double?
 )
 
 data class BatteryCapability(
@@ -71,11 +73,14 @@ data class BatteryCapability(
 
 data class DischargeConfig(
     val sampleIntervalMs: Long = 1000L,
-    val cpuLoadRatio: Float = 0.65f,
-    val keepScreenOn: Boolean = true,
-    val maxBrightness: Boolean = true,
+    val highLoadBelowTempC: Double = 38.0,
+    val mediumLoadBelowTempC: Double = 42.0,
+    val lowLoadBelowTempC: Double = 45.0,
     val stopAtBatteryPercent: Int = 15,
-    val reduceLoadAtTempC: Double = 43.0,
     val stopAtTempC: Double = 48.0,
-    val maxDurationMinutes: Int = 60
+    val maxDurationMinutes: Int = 60,
+    val highLoadRatio: Float = 0.92f,
+    val mediumLoadRatio: Float = 0.75f,
+    val lowLoadRatio: Float = 0.45f,
+    val coolDownLoadRatio: Float = 0.20f
 )

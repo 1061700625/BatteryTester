@@ -10,14 +10,15 @@ import android.view.View
 import com.xfxuezhang.batterytester.data.BatterySample
 import kotlin.math.abs
 import kotlin.math.max
-import kotlin.math.min
 
 enum class ChartMetric(val displayName: String, val unit: String) {
     LEVEL("电量", "%"),
     CURRENT("瞬时电流", "mA"),
     TEMPERATURE("温度", "℃"),
     VOLTAGE("电压", "V"),
-    POWER("估算功率", "W")
+    POWER("估算功率", "W"),
+    CPU_USAGE("CPU 使用率", "%"),
+    CPU_LOAD_TARGET("负载目标", "%")
 }
 
 class ChartView @JvmOverloads constructor(
@@ -28,41 +29,50 @@ class ChartView @JvmOverloads constructor(
     private var metric: ChartMetric = ChartMetric.LEVEL
 
     private val axisPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(156, 163, 175)
-        strokeWidth = 2f
-        textSize = 26f
+        color = Color.rgb(148, 163, 184)
+        strokeWidth = 1.5f
+        textSize = 24f
     }
     private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(229, 231, 235)
+        color = Color.rgb(241, 245, 249)
         strokeWidth = 1f
     }
     private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(37, 99, 235)
-        strokeWidth = 5f
+        color = Color.rgb(14, 165, 233)
+        strokeWidth = 4.5f
         style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+    private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(14, 165, 233)
+        style = Paint.Style.FILL
     }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(17, 24, 39)
-        textSize = 34f
+        color = Color.rgb(30, 41, 59)
+        textSize = 32f
         isFakeBoldText = true
     }
     private val hintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(107, 114, 128)
-        textSize = 28f
+        color = Color.rgb(100, 116, 139)
+        textSize = 26f
     }
 
     fun setData(samples: List<BatterySample>, metric: ChartMetric) {
         this.samples = samples
         this.metric = metric
+        val lineColor = colorForMetric(metric)
+        linePaint.color = lineColor
+        dotPaint.color = lineColor
         invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val left = 84f
-        val top = 72f
+        val top = 70f
         val right = width - 32f
-        val bottom = height - 64f
+        val bottom = height - 60f
         canvas.drawText("${metric.displayName}曲线", left, 42f, textPaint)
 
         canvas.drawLine(left, bottom, right, bottom, axisPaint)
@@ -117,6 +127,24 @@ class ChartView @JvmOverloads constructor(
             previousTimestamp = timestamp
         }
         canvas.drawPath(path, linePaint)
+
+        points.lastOrNull()?.let { (timestamp, value) ->
+            val x = left + (timestamp - start).toFloat() / (end - start).toFloat() * (right - left)
+            val y = bottom - ((value - minV) / (maxV - minV)).toFloat() * (bottom - top)
+            canvas.drawCircle(x, y, 6.5f, dotPaint)
+        }
+    }
+
+    private fun colorForMetric(metric: ChartMetric): Int {
+        return when (metric) {
+            ChartMetric.LEVEL -> Color.rgb(34, 197, 94)
+            ChartMetric.CURRENT -> Color.rgb(14, 165, 233)
+            ChartMetric.TEMPERATURE -> Color.rgb(249, 115, 22)
+            ChartMetric.VOLTAGE -> Color.rgb(139, 92, 246)
+            ChartMetric.POWER -> Color.rgb(20, 184, 166)
+            ChartMetric.CPU_USAGE -> Color.rgb(99, 102, 241)
+            ChartMetric.CPU_LOAD_TARGET -> Color.rgb(236, 72, 153)
+        }
     }
 
     private fun valueOf(sample: BatterySample): Double? {
@@ -130,6 +158,8 @@ class ChartView @JvmOverloads constructor(
                 val voltage = sample.voltageV
                 if (current != null && voltage != null) abs(current / 1000.0) * voltage else null
             }
+            ChartMetric.CPU_USAGE -> sample.cpuUsagePercent
+            ChartMetric.CPU_LOAD_TARGET -> sample.cpuLoadTargetPercent
         }
     }
 
@@ -140,6 +170,8 @@ class ChartView @JvmOverloads constructor(
             ChartMetric.TEMPERATURE -> "%.1f".format(value)
             ChartMetric.VOLTAGE -> "%.2f".format(value)
             ChartMetric.POWER -> "%.2f".format(value)
+            ChartMetric.CPU_USAGE -> "%.0f%s".format(value, metric.unit)
+            ChartMetric.CPU_LOAD_TARGET -> "%.0f%s".format(value, metric.unit)
         }
     }
 }
