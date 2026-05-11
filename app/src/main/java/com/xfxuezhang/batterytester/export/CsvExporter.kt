@@ -34,7 +34,7 @@ object CsvExporter {
                 session.endLevel?.toString().orEmpty()
             ).joinToString(",") { it.csvEscape() })
             out.appendLine()
-            out.appendLine("timestamp,elapsed_seconds,level_percent,current_now_ma,current_average_ma,charge_counter_mah,energy_counter_nwh,voltage_v,temperature_c,health,status,plugged,thermal_status,is_power_save_mode,cpu_usage_percent,cpu_load_target_percent")
+            out.appendLine("timestamp,elapsed_seconds,level_percent,current_now_ma,current_average_ma,charge_counter_mah,energy_counter_nwh,voltage_v,temperature_c,health,status,plugged,thermal_status,is_power_save_mode,cpu_usage_percent,cpu_load_target_percent,network_downloaded_bytes,network_limit_bytes")
             samples.forEach { s ->
                 val elapsed = (s.timestamp - session.startTime) / 1000.0
                 out.appendLine(listOf(
@@ -53,7 +53,9 @@ object CsvExporter {
                     s.thermalStatus?.toString().orEmpty(),
                     s.isPowerSaveMode?.toString().orEmpty(),
                     s.cpuUsagePercent?.format2().orEmpty(),
-                    s.cpuLoadTargetPercent?.format2().orEmpty()
+                    s.cpuLoadTargetPercent?.format2().orEmpty(),
+                    s.networkDownloadedBytes?.toString().orEmpty(),
+                    s.networkLimitBytes?.toString().orEmpty()
                 ).joinToString(",") { it.csvEscape() })
             }
         }

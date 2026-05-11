@@ -8,19 +8,28 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.text.Editable
+import android.text.InputType
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.CheckBox
+import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.RadioButton
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.xfxuezhang.batterytester.battery.BatteryCapability
 import com.xfxuezhang.batterytester.battery.BatteryMode
 import com.xfxuezhang.batterytester.battery.BatterySampler
@@ -30,6 +39,7 @@ import com.xfxuezhang.batterytester.data.BatteryRepository
 import com.xfxuezhang.batterytester.data.BatterySample
 import com.xfxuezhang.batterytester.data.BatterySession
 import com.xfxuezhang.batterytester.export.CsvExporter
+import com.xfxuezhang.batterytester.load.NetworkTransferLoad
 import com.xfxuezhang.batterytester.service.BatteryTestService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -54,11 +64,19 @@ class MainActivity : ComponentActivity() {
     private var currentScreen: Screen = Screen.HOME
     private var currentDetailSessionId: String? = null
     private var originalBrightness: Float? = null
+    private var loadCpuChecked: Boolean = true
+    private var loadGpuChecked: Boolean = true
+    private var loadBrightnessChecked: Boolean = true
+    private var loadNetworkChecked: Boolean = false
+    private var networkUrlValue: String = NetworkTransferLoad.DEFAULT_DOWNLOAD_URL
+    private var networkLimitOptionValue: String = LIMIT_UNLIMITED
+    private var networkCustomLimitMbValue: String = "500"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         repository = BatteryRepository.get(this)
         sampler = BatterySampler(this)
+        loadOptionsFromPrefs()
         requestNotificationPermissionIfNeeded()
         window.statusBarColor = color("#F7FAFC")
         window.navigationBarColor = color("#F7FAFC")
@@ -121,6 +139,8 @@ class MainActivity : ComponentActivity() {
         val actionCard = card()
         actionCard.addView(sectionTitle("测试入口"))
         actionCard.addView(body("选择测试模式后，应用会保持当前测试页常亮，采样曲线会持续写入本地数据库。"))
+        actionCard.addView(space(10))
+        actionCard.addView(loadOptionsView())
         actionCard.addView(space(12))
         actionCard.addView(primaryButton("⚡ 开始放电测试") { confirmStartDischarge() })
         actionCard.addView(space(10))
@@ -131,7 +151,7 @@ class MainActivity : ComponentActivity() {
 
         val safetyCard = card()
         safetyCard.addView(sectionTitle("安全策略"))
-        safetyCard.addView(body("放电测试会按温度自动调整 CPU 负载：低温使用约 92% 高负载，避免 100% 满载导致界面刷新卡顿；中温降到中/低负载，接近高温阈值进入冷却负载。电量低于 15%、电池温度达到 48℃、或系统热状态达到严重级别时会自动停止。"))
+        safetyCard.addView(body("放电测试支持 CPU 计算、GPU 计算、屏幕亮度、网络传输四类负载组件。CPU 和网络负载会按温度自动降载或停止；GPU 和屏幕亮度仅在 App 前台界面生效。电量低于 15%、电池温度达到 48℃、或系统热状态达到严重级别时会自动停止。"))
         root.addView(safetyCard)
 
         setContentView(scroll(root))
@@ -169,16 +189,53 @@ class MainActivity : ComponentActivity() {
         if (sessions.isEmpty()) {
             root.addView(body("暂无测试记录。"))
         } else {
+            root.addView(body("长按某一条历史记录可删除该记录和对应采样数据。"))
+            root.addView(space(8))
             sessions.forEach { session ->
-                val c = card()
-                c.addView(sectionTitle(session.mode.displayName()))
-                c.addView(body(session.toHistoryText()))
-                c.addView(secondaryButton("查看曲线") { showDetail(session.id) })
+                val c = historyCard(session)
                 root.addView(c)
             }
         }
         setContentView(scroll(root))
         applyScreenLoadIfNeeded()
+    }
+
+    private fun historyCard(session: BatterySession): LinearLayout {
+        return card().apply {
+            isLongClickable = true
+            addView(sectionTitle(session.mode.displayName()))
+            addView(body(session.toHistoryText()))
+            addView(secondaryButton("查看曲线") { showDetail(session.id) })
+            setOnLongClickListener {
+                confirmDeleteSession(session)
+                true
+            }
+        }
+    }
+
+    private fun confirmDeleteSession(session: BatterySession) {
+        val activeSession = repository.getActiveSession()
+        if (activeSession?.id == session.id || session.endTime == null) {
+            Toast.makeText(this, "正在进行的测试不能删除，请先停止测试。", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("删除历史记录")
+            .setMessage("确定删除这条${session.mode.displayName()}记录吗？对应采样数据也会一起删除，删除后无法恢复。")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("删除") { _, _ ->
+                uiScope.launch {
+                    val deleted = withContext(Dispatchers.IO) { repository.deleteSession(session.id) }
+                    if (deleted) {
+                        Toast.makeText(this@MainActivity, "记录已删除", Toast.LENGTH_SHORT).show()
+                        showHistory()
+                    } else {
+                        Toast.makeText(this@MainActivity, "删除失败，记录可能已不存在", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            .show()
     }
 
     private fun showDetail(sessionId: String) {
@@ -202,6 +259,17 @@ class MainActivity : ComponentActivity() {
         infoCard.addView(space(8))
         infoCard.addView(primaryButton("导出 CSV") { exportSession(sessionId) })
         root.addView(infoCard)
+        if (shouldShowGpuLoad(sessionId)) {
+            val gpuCard = card()
+            gpuCard.addView(sectionTitle("GPU 动画负载"))
+            gpuCard.addView(body("GPU 计算已启用。此区域会持续绘制粒子动画，用于增加前台图形渲染负载；温度升高时请优先停止测试或取消 GPU 负载。"))
+            gpuCard.addView(space(8))
+            gpuCard.addView(GpuLoadView(this).apply {
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(132))
+                background = roundedBackground("#F8FBFF", dp(12), strokeColor = "#E2E8F0", strokeWidth = 1)
+            })
+            root.addView(gpuCard)
+        }
 
         val levelChart = chartView()
         val currentChart = chartView()
@@ -210,6 +278,7 @@ class MainActivity : ComponentActivity() {
         val powerChart = chartView()
         val cpuUsageChart = chartView()
         val cpuLoadChart = chartView()
+        val networkDownloadedChart = chartView()
 
         root.addView(chartCard(levelChart))
         root.addView(chartCard(currentChart))
@@ -218,6 +287,7 @@ class MainActivity : ComponentActivity() {
         root.addView(chartCard(powerChart))
         root.addView(chartCard(cpuUsageChart))
         root.addView(chartCard(cpuLoadChart))
+        root.addView(chartCard(networkDownloadedChart))
 
         setContentView(scroll(root))
 
@@ -232,6 +302,11 @@ class MainActivity : ComponentActivity() {
                     delay(500)
                     continue
                 }
+                if (session.endTime != null && shouldShowGpuLoad(sessionId)) {
+                    clearActiveLoadOptions()
+                    showDetail(sessionId)
+                    return@launch
+                }
                 sessionText.text = session.toDetailText()
                 summaryText.text = samples.summaryText(session)
                 levelChart.setData(samples, ChartMetric.LEVEL)
@@ -241,15 +316,35 @@ class MainActivity : ComponentActivity() {
                 powerChart.setData(samples, ChartMetric.POWER)
                 cpuUsageChart.setData(samples, ChartMetric.CPU_USAGE)
                 cpuLoadChart.setData(samples, ChartMetric.CPU_LOAD_TARGET)
+                networkDownloadedChart.setData(samples, ChartMetric.NETWORK_DOWNLOADED_MB)
                 delay(if (session.endTime == null) 1500 else 5000)
             }
         }
     }
 
     private fun confirmStartDischarge() {
+        saveLoadOptionsToPrefs()
+        if (loadNetworkChecked) {
+            val validationError = validateNetworkConfig()
+            if (validationError != null) {
+                Toast.makeText(this, validationError, Toast.LENGTH_LONG).show()
+                return
+            }
+            AlertDialog.Builder(this)
+                .setTitle("确认网络传输负载")
+                .setMessage(networkConfirmMessage())
+                .setPositiveButton("确认启用") { _, _ -> showDischargeConfirmDialog() }
+                .setNegativeButton("取消", null)
+                .show()
+        } else {
+            showDischargeConfirmDialog()
+        }
+    }
+
+    private fun showDischargeConfirmDialog() {
         AlertDialog.Builder(this)
             .setTitle("开始放电测试")
-            .setMessage("放电测试会提高屏幕亮度并启动计算负载，以加快耗电速度。温度较低时会使用约 92% 高负载，不再占满 100%，以减少界面刷新卡顿；温度升高后会自动降负载，接近高温阈值时会进入冷却负载。你可以随时在页面或通知栏停止测试。建议在 20% 以上电量开始。")
+            .setMessage(dischargeConfirmMessage())
             .setPositiveButton("开始") { _, _ -> startTest(BatteryMode.DISCHARGE) }
             .setNegativeButton("取消", null)
             .show()
@@ -266,7 +361,26 @@ class MainActivity : ComponentActivity() {
 
     private fun startTest(mode: BatteryMode) {
         val sessionId = UUID.randomUUID().toString()
-        ContextCompat.startForegroundService(this, BatteryTestService.startIntent(this, mode, sessionId))
+        val loadCpu = mode == BatteryMode.DISCHARGE && loadCpuChecked
+        val loadGpu = mode == BatteryMode.DISCHARGE && loadGpuChecked
+        val loadBrightness = mode == BatteryMode.DISCHARGE && loadBrightnessChecked
+        val loadNetwork = mode == BatteryMode.DISCHARGE && loadNetworkChecked
+        val networkLimitBytes = if (loadNetwork) networkLimitBytesFromInput() else null
+        saveActiveLoadOptions(sessionId, loadCpu, loadGpu, loadBrightness, loadNetwork)
+        ContextCompat.startForegroundService(
+            this,
+            BatteryTestService.startIntent(
+                this,
+                mode,
+                sessionId,
+                loadCpu = loadCpu,
+                loadGpu = loadGpu,
+                loadScreenBrightness = loadBrightness,
+                loadNetwork = loadNetwork,
+                networkUrl = networkUrlValue.trim().ifBlank { NetworkTransferLoad.DEFAULT_DOWNLOAD_URL },
+                networkLimitBytes = networkLimitBytes
+            )
+        )
         keepScreenAwakeImmediately(mode)
         Toast.makeText(this, "测试已启动，运行期间将保持屏幕常亮", Toast.LENGTH_SHORT).show()
         showDetail(sessionId)
@@ -275,6 +389,7 @@ class MainActivity : ComponentActivity() {
     private fun stopCurrentTest() {
         startService(BatteryTestService.stopIntent(this))
         clearScreenLoad()
+        clearActiveLoadOptions()
         Toast.makeText(this, "已请求停止测试", Toast.LENGTH_SHORT).show()
     }
 
@@ -290,6 +405,361 @@ class MainActivity : ComponentActivity() {
         startActivity(Intent.createChooser(intent, "分享 CSV"))
     }
 
+    private fun loadOptionsView(): LinearLayout {
+        val outer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = roundedBackground("#F8FAFC", dp(12), strokeColor = "#E2E8F0", strokeWidth = 1)
+        }
+
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, 0)
+        }
+        val headerText = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val summaryText = TextView(this).apply {
+            textSize = 12f
+            setTextColor(color("#64748B"))
+        }
+        val toggleText = TextView(this).apply {
+            text = "展开"
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(color("#0369A1"))
+            setPadding(dp(10), dp(5), dp(10), dp(5))
+            background = roundedBackground("#DDF3FF", dp(999))
+        }
+        val detail = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+
+        fun refreshSummary() {
+            summaryText.text = "当前选择：${selectedLoadOptionsText()}"
+        }
+
+        fun toggle() {
+            val expanded = detail.visibility != View.VISIBLE
+            detail.visibility = if (expanded) View.VISIBLE else View.GONE
+            toggleText.text = if (expanded) "收起" else "展开"
+        }
+
+        headerText.addView(TextView(this).apply {
+            text = "放电负载组件"
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(color("#1E293B"))
+        })
+        headerText.addView(summaryText)
+        header.addView(headerText)
+        header.addView(toggleText)
+        header.setOnClickListener { toggle() }
+        toggleText.setOnClickListener { toggle() }
+
+        detail.addView(space(10))
+        detail.addView(loadCheckBox("CPU 计算", "浮点与混合计算负载，按温度自动调节。", loadCpuChecked) {
+            loadCpuChecked = it
+            saveLoadOptionsToPrefs()
+            refreshSummary()
+        })
+        detail.addView(loadCheckBox("GPU 计算", "前台粒子动画渲染，接近游戏类图形负载。", loadGpuChecked) {
+            loadGpuChecked = it
+            saveLoadOptionsToPrefs()
+            refreshSummary()
+        })
+        detail.addView(loadCheckBox("屏幕亮度", "放电测试期间保持屏幕常亮，并将当前测试页亮度提升到最高。", loadBrightnessChecked) {
+            loadBrightnessChecked = it
+            saveLoadOptionsToPrefs()
+            refreshSummary()
+        })
+        detail.addView(loadCheckBox("网络传输", "默认关闭。启用后会反复下载小数据块，可能消耗移动流量。", loadNetworkChecked) {
+            loadNetworkChecked = it
+            saveLoadOptionsToPrefs()
+            refreshSummary()
+        })
+        detail.addView(space(8))
+        detail.addView(networkConfigView())
+
+        refreshSummary()
+        outer.addView(header)
+        outer.addView(detail)
+        return outer
+    }
+
+    private fun networkConfigView(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(12), dp(10), dp(12), dp(10))
+        background = roundedBackground("#FFFFFF", dp(10), strokeColor = "#E2E8F0", strokeWidth = 1)
+        addView(TextView(this@MainActivity).apply {
+            text = "网络传输设置"
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(color("#334155"))
+        })
+        addView(space(6))
+        addView(smallLabel("下载地址"))
+        addView(EditText(this@MainActivity).apply {
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            setText(networkUrlValue)
+            textSize = 13f
+            setTextColor(color("#1E293B"))
+            setHintTextColor(color("#94A3B8"))
+            hint = NetworkTransferLoad.DEFAULT_DOWNLOAD_URL
+            background = roundedBackground("#F8FAFC", dp(8), strokeColor = "#CBD5E1", strokeWidth = 1)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            addTextChangedListener(simpleWatcher {
+                networkUrlValue = it
+                saveLoadOptionsToPrefs()
+            })
+        })
+        addView(space(8))
+        addView(smallLabel("流量上限"))
+
+        val radios = mutableMapOf<String, RadioButton>()
+        lateinit var customInput: EditText
+
+        fun updateLimitSelection() {
+            radios.forEach { (option, radio) -> radio.isChecked = option == networkLimitOptionValue }
+            customInput.visibility = if (networkLimitOptionValue == LIMIT_CUSTOM) View.VISIBLE else View.GONE
+        }
+
+        fun addLimitOption(option: String, title: String, description: String) {
+            val row = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(4), 0, dp(4))
+            }
+            val radio = RadioButton(this@MainActivity).apply {
+                isChecked = option == networkLimitOptionValue
+                setOnClickListener {
+                    networkLimitOptionValue = option
+                    updateLimitSelection()
+                    saveLoadOptionsToPrefs()
+                }
+            }
+            radios[option] = radio
+            val textColumn = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            textColumn.addView(TextView(this@MainActivity).apply {
+                text = title
+                textSize = 13f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(color("#1E293B"))
+            })
+            textColumn.addView(TextView(this@MainActivity).apply {
+                text = description
+                textSize = 12f
+                setTextColor(color("#64748B"))
+            })
+            row.setOnClickListener { radio.performClick() }
+            row.addView(radio)
+            row.addView(textColumn)
+            addView(row)
+        }
+
+        addLimitOption(LIMIT_UNLIMITED, "不限制", "默认选项。网络负载会持续运行，直到温控或手动停止。")
+        addLimitOption(LIMIT_100_MB, "100 MB", "轻量测试，适合移动网络下谨慎使用。")
+        addLimitOption(LIMIT_500_MB, "500 MB", "中等测试，适合 Wi-Fi 下观察网络负载曲线。")
+        addLimitOption(LIMIT_1_GB, "1 GB", "较长测试，建议仅在 Wi-Fi 或不限流量网络下使用。")
+        addLimitOption(LIMIT_CUSTOM, "自定义", "输入自定义 MB 数值。")
+
+        customInput = EditText(this@MainActivity).apply {
+            setSingleLine(true)
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(networkCustomLimitMbValue)
+            textSize = 13f
+            setTextColor(color("#1E293B"))
+            setHintTextColor(color("#94A3B8"))
+            hint = "500"
+            background = roundedBackground("#F8FAFC", dp(8), strokeColor = "#CBD5E1", strokeWidth = 1)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            addTextChangedListener(simpleWatcher {
+                networkCustomLimitMbValue = it
+                saveLoadOptionsToPrefs()
+            })
+        }
+        addView(customInput)
+        addView(space(6))
+        addView(TextView(this@MainActivity).apply {
+            text = "网络传输默认关闭。启用前会再次确认，达到流量上限后只停止网络负载，不停止整次放电测试。"
+            textSize = 12f
+            setLineSpacing(3f, 1.05f)
+            setTextColor(color("#64748B"))
+        })
+        updateLimitSelection()
+    }
+
+    private fun smallLabel(text: String): TextView = TextView(this).apply {
+        this.text = text
+        textSize = 12f
+        typeface = Typeface.DEFAULT_BOLD
+        setTextColor(color("#64748B"))
+        setPadding(0, 0, 0, dp(4))
+    }
+
+    private fun simpleWatcher(onText: (String) -> Unit): TextWatcher {
+        return object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) { onText(s?.toString().orEmpty()) }
+            override fun afterTextChanged(s: Editable?) = Unit
+        }
+    }
+
+    private fun validateNetworkConfig(): String? {
+        val url = networkUrlValue.trim()
+        if (url.isBlank()) return "网络传输地址不能为空"
+        if (!url.startsWith("https://") && !url.startsWith("http://")) return "网络传输地址必须以 http:// 或 https:// 开头"
+        if (networkLimitOptionValue == LIMIT_CUSTOM) {
+            val limitText = networkCustomLimitMbValue.trim()
+            if (limitText.isBlank()) return "自定义流量上限不能为空"
+            if (limitText.toDoubleOrNull() == null) return "自定义流量上限必须是数字"
+            if ((limitText.toDoubleOrNull() ?: 0.0) <= 0.0) return "自定义流量上限必须大于 0"
+        }
+        return null
+    }
+
+    private fun networkLimitBytesFromInput(): Long? {
+        val mb = when (networkLimitOptionValue) {
+            LIMIT_UNLIMITED -> return null
+            LIMIT_100_MB -> 100.0
+            LIMIT_500_MB -> 500.0
+            LIMIT_1_GB -> 1024.0
+            LIMIT_CUSTOM -> networkCustomLimitMbValue.trim().toDoubleOrNull() ?: return null
+            else -> return null
+        }
+        return (mb * 1024.0 * 1024.0).toLong()
+    }
+
+    private fun networkLimitDisplayText(): String {
+        return networkLimitBytesFromInput()?.let { formatBytes(it) } ?: "不限制"
+    }
+
+    private fun networkConfirmMessage(): String {
+        val limitText = networkLimitDisplayText()
+        return "网络传输负载会持续从指定地址下载数据，用于增加耗电。\n\n下载地址：${networkUrlValue.trim()}\n流量上限：$limitText\n\n如果当前使用移动网络，可能产生流量费用。达到上限后只会停止网络负载，CPU、GPU、屏幕亮度等其他负载会继续按温度策略运行。"
+    }
+
+    private fun loadCheckBox(title: String, description: String, checked: Boolean, onChanged: (Boolean) -> Unit): LinearLayout {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, dp(4))
+        }
+        val checkBox = CheckBox(this).apply {
+            isChecked = checked
+            setOnCheckedChangeListener { _, isChecked -> onChanged(isChecked) }
+        }
+        val textColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        textColumn.addView(TextView(this).apply {
+            text = title
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(color("#1E293B"))
+        })
+        textColumn.addView(TextView(this).apply {
+            text = description
+            textSize = 12f
+            setLineSpacing(3f, 1.05f)
+            setTextColor(color("#64748B"))
+        })
+        row.addView(checkBox)
+        row.addView(textColumn)
+        return row
+    }
+
+    private fun dischargeConfirmMessage(): String {
+        val selected = selectedLoadOptionsText()
+        val networkText = if (loadNetworkChecked) "网络传输地址：${networkUrlValue.trim()}，流量上限：${networkLimitDisplayText()}。" else "网络传输未启用。"
+        return "放电测试将启用：$selected。CPU 和网络负载会按温度自动降载；GPU 负载仅在 App 前台绘制；屏幕亮度负载会提升当前测试页亮度。$networkText 你可以随时在页面或通知栏停止测试。建议在 20% 以上电量开始。"
+    }
+
+    private fun selectedLoadOptionsText(): String {
+        val items = mutableListOf<String>()
+        if (loadCpuChecked) items += "CPU 计算"
+        if (loadGpuChecked) items += "GPU 计算"
+        if (loadBrightnessChecked) items += "屏幕亮度"
+        if (loadNetworkChecked) items += "网络传输"
+        return if (items.isEmpty()) "仅采样，不制造主动负载" else items.joinToString("、")
+    }
+
+    private fun activeLoadOptionsText(): String {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val items = mutableListOf<String>()
+        if (prefs.getBoolean(PREF_ACTIVE_CPU, false)) items += "CPU 计算"
+        if (prefs.getBoolean(PREF_ACTIVE_GPU, false)) items += "GPU 计算"
+        if (prefs.getBoolean(PREF_ACTIVE_BRIGHTNESS, false)) items += "屏幕亮度"
+        if (prefs.getBoolean(PREF_ACTIVE_NETWORK, false)) items += "网络传输"
+        return if (items.isEmpty()) "仅采样" else items.joinToString("、")
+    }
+
+    private fun loadOptionsFromPrefs() {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        loadCpuChecked = prefs.getBoolean(PREF_LOAD_CPU, true)
+        loadGpuChecked = prefs.getBoolean(PREF_LOAD_GPU, true)
+        loadBrightnessChecked = prefs.getBoolean(PREF_LOAD_BRIGHTNESS, true)
+        loadNetworkChecked = prefs.getBoolean(PREF_LOAD_NETWORK, false)
+        networkUrlValue = prefs.getString(PREF_NETWORK_URL, NetworkTransferLoad.DEFAULT_DOWNLOAD_URL) ?: NetworkTransferLoad.DEFAULT_DOWNLOAD_URL
+        networkLimitOptionValue = prefs.getString(PREF_NETWORK_LIMIT_OPTION, LIMIT_UNLIMITED) ?: LIMIT_UNLIMITED
+        if (networkLimitOptionValue !in setOf(LIMIT_UNLIMITED, LIMIT_100_MB, LIMIT_500_MB, LIMIT_1_GB, LIMIT_CUSTOM)) {
+            networkLimitOptionValue = LIMIT_UNLIMITED
+        }
+        networkCustomLimitMbValue = prefs.getString(PREF_NETWORK_CUSTOM_LIMIT_MB, "500") ?: "500"
+    }
+
+    private fun saveLoadOptionsToPrefs() {
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+            .putBoolean(PREF_LOAD_CPU, loadCpuChecked)
+            .putBoolean(PREF_LOAD_GPU, loadGpuChecked)
+            .putBoolean(PREF_LOAD_BRIGHTNESS, loadBrightnessChecked)
+            .putBoolean(PREF_LOAD_NETWORK, loadNetworkChecked)
+            .putString(PREF_NETWORK_URL, networkUrlValue.trim().ifBlank { NetworkTransferLoad.DEFAULT_DOWNLOAD_URL })
+            .putString(PREF_NETWORK_LIMIT_OPTION, networkLimitOptionValue)
+            .putString(PREF_NETWORK_CUSTOM_LIMIT_MB, networkCustomLimitMbValue.trim())
+            .apply()
+    }
+
+    private fun saveActiveLoadOptions(sessionId: String, cpu: Boolean, gpu: Boolean, brightness: Boolean, network: Boolean) {
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+            .putString(PREF_ACTIVE_SESSION_ID, sessionId)
+            .putBoolean(PREF_ACTIVE_CPU, cpu)
+            .putBoolean(PREF_ACTIVE_GPU, gpu)
+            .putBoolean(PREF_ACTIVE_BRIGHTNESS, brightness)
+            .putBoolean(PREF_ACTIVE_NETWORK, network)
+            .apply()
+    }
+
+    private fun clearActiveLoadOptions() {
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+            .remove(PREF_ACTIVE_SESSION_ID)
+            .remove(PREF_ACTIVE_CPU)
+            .remove(PREF_ACTIVE_GPU)
+            .remove(PREF_ACTIVE_BRIGHTNESS)
+            .remove(PREF_ACTIVE_NETWORK)
+            .apply()
+    }
+
+    private fun shouldShowGpuLoad(sessionId: String): Boolean {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val activeSessionId = repository.getActiveSession()?.id
+        return activeSessionId == sessionId &&
+            prefs.getString(PREF_ACTIVE_SESSION_ID, null) == sessionId &&
+            prefs.getBoolean(PREF_ACTIVE_GPU, false)
+    }
+
+    private fun isActiveBrightnessLoadEnabled(): Boolean {
+        return getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getBoolean(PREF_ACTIVE_BRIGHTNESS, false)
+    }
+
     private fun requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -302,7 +772,7 @@ class MainActivity : ComponentActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val attrs = window.attributes
         if (originalBrightness == null) originalBrightness = attrs.screenBrightness
-        if (mode == BatteryMode.DISCHARGE) attrs.screenBrightness = 1.0f
+        if (mode == BatteryMode.DISCHARGE && isActiveBrightnessLoadEnabled()) attrs.screenBrightness = 1.0f
         window.attributes = attrs
     }
 
@@ -318,7 +788,7 @@ class MainActivity : ComponentActivity() {
         val attrs = window.attributes
         if (originalBrightness == null) originalBrightness = attrs.screenBrightness
 
-        if (activeSession.mode == BatteryMode.DISCHARGE) {
+        if (activeSession.mode == BatteryMode.DISCHARGE && isActiveBrightnessLoadEnabled()) {
             attrs.screenBrightness = 1.0f
         } else {
             originalBrightness?.let { attrs.screenBrightness = it }
@@ -338,7 +808,29 @@ class MainActivity : ComponentActivity() {
 
     private fun scroll(root: LinearLayout): ScrollView = ScrollView(this).apply {
         setBackgroundColor(color("#F7FAFC"))
+
+        val baseLeft = root.paddingLeft
+        val baseTop = root.paddingTop
+        val baseRight = root.paddingRight
+        val baseBottom = root.paddingBottom
+
+        ViewCompat.setOnApplyWindowInsetsListener(this) { _, insets ->
+            val safeInsets = insets.getInsets(
+                WindowInsetsCompat.Type.statusBars() or
+                    WindowInsetsCompat.Type.displayCutout() or
+                    WindowInsetsCompat.Type.navigationBars()
+            )
+            root.setPadding(
+                baseLeft,
+                baseTop + safeInsets.top,
+                baseRight,
+                baseBottom + safeInsets.bottom
+            )
+            insets
+        }
+
         addView(root)
+        ViewCompat.requestApplyInsets(this)
     }
 
     private fun verticalRoot(): LinearLayout = LinearLayout(this).apply {
@@ -353,14 +845,29 @@ class MainActivity : ComponentActivity() {
         elevation = dp(2).toFloat()
         layoutParams = blockLayout(bottom = 12)
 
-        addView(label("作者：小锋学长生活大爆炸", "#0F766E", "#DDF7F0"))
-        addView(space(10))
         addView(TextView(this@MainActivity).apply {
             text = "充放电监测助手"
             textSize = 28f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(color("#0F172A"))
             setPadding(0, 0, 0, dp(4))
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = "作者：小锋学长生活大爆炸"
+            textSize = 12.5f
+            setLineSpacing(3f, 1.03f)
+            setTextColor(color("#0F766E"))
+            setPadding(0, 0, 0, dp(2))
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = "项目：https://github.com/1061700625/BatteryTester"
+            textSize = 12.5f
+            setLineSpacing(3f, 1.03f)
+            setTextColor(color("#2563EB"))
+            setPadding(0, 0, 0, dp(8))
+            setOnClickListener {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/1061700625/BatteryTester")))
+            }
         })
         addView(TextView(this@MainActivity).apply {
             text = "快速放电、充电曲线、温度与电流采样，一站式记录手机电池表现。"
@@ -513,7 +1020,12 @@ class MainActivity : ComponentActivity() {
                 appendLine("温度：${latestSample.temperatureC?.let { "%.1f ℃".format(it) } ?: "不可用"}")
                 appendLine("CPU 使用率：${latestSample.cpuUsagePercent.formatPercent()}")
                 appendLine("负载目标：${latestSample.cpuLoadTargetPercent.formatPercent()}")
+                if (latestSample.networkDownloadedBytes != null) {
+                    val limit = latestSample.networkLimitBytes?.let { "/${formatBytes(it)}" }.orEmpty()
+                    appendLine("网络下载：${formatBytes(latestSample.networkDownloadedBytes)}$limit")
+                }
             }
+            appendLine("负载组件：${activeLoadOptionsText()}")
             append("启动方式：用户点击")
         }
     }
@@ -553,6 +1065,8 @@ class MainActivity : ComponentActivity() {
         val avgCpu = mapNotNull { it.cpuUsagePercent }.takeIf { it.isNotEmpty() }?.average()
         val maxCpu = mapNotNull { it.cpuUsagePercent }.maxOrNull()
         val avgTarget = mapNotNull { it.cpuLoadTargetPercent }.takeIf { it.isNotEmpty() }?.average()
+        val networkDownloaded = mapNotNull { it.networkDownloadedBytes }.maxOrNull()
+        val networkLimit = lastOrNull { it.networkLimitBytes != null }?.networkLimitBytes
         return buildString {
             appendLine("采样点：${size}")
             appendLine("时长：${durationSeconds}s")
@@ -563,7 +1077,8 @@ class MainActivity : ComponentActivity() {
             appendLine("温升：${if (startTemp != null && maxTemp != null) "%.1f ℃".format(maxTemp - startTemp) else "不可用"}")
             appendLine("平均 CPU 使用率：${avgCpu.formatPercent()}")
             appendLine("最高 CPU 使用率：${maxCpu.formatPercent()}")
-            append("平均负载目标：${avgTarget.formatPercent()}")
+            appendLine("平均负载目标：${avgTarget.formatPercent()}")
+            append("网络下载：${networkDownloaded?.let { formatBytes(it) } ?: "未启用"}${networkLimit?.let { "/${formatBytes(it)}" } ?: ""}")
         }
     }
 
@@ -617,9 +1132,32 @@ class MainActivity : ComponentActivity() {
     private fun Double?.formatMa(): String = this?.let { "%.0f mA".format(it) } ?: "不可用"
     private fun Double?.formatPercent(): String = this?.let { "%.1f%%".format(it) } ?: "不可用"
 
+    private fun formatBytes(bytes: Long): String {
+        val mb = bytes / 1024.0 / 1024.0
+        return if (mb >= 1024.0) "%.2f GB".format(mb / 1024.0) else "%.1f MB".format(mb)
+    }
+
     private enum class Screen { HOME, HISTORY, DETAIL }
 
     companion object {
         private val TIME = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        private const val PREFS_NAME = "load_options"
+        private const val PREF_LOAD_CPU = "load_cpu"
+        private const val PREF_LOAD_GPU = "load_gpu"
+        private const val PREF_LOAD_BRIGHTNESS = "load_brightness"
+        private const val PREF_LOAD_NETWORK = "load_network"
+        private const val PREF_NETWORK_URL = "network_url"
+        private const val PREF_NETWORK_LIMIT_OPTION = "network_limit_option"
+        private const val PREF_NETWORK_CUSTOM_LIMIT_MB = "network_custom_limit_mb"
+        private const val LIMIT_UNLIMITED = "unlimited"
+        private const val LIMIT_100_MB = "100mb"
+        private const val LIMIT_500_MB = "500mb"
+        private const val LIMIT_1_GB = "1gb"
+        private const val LIMIT_CUSTOM = "custom"
+        private const val PREF_ACTIVE_SESSION_ID = "active_session_id"
+        private const val PREF_ACTIVE_CPU = "active_cpu"
+        private const val PREF_ACTIVE_GPU = "active_gpu"
+        private const val PREF_ACTIVE_BRIGHTNESS = "active_brightness"
+        private const val PREF_ACTIVE_NETWORK = "active_network"
     }
 }

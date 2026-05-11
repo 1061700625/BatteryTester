@@ -55,6 +55,8 @@ class BatteryDbHelper(context: Context) : SQLiteOpenHelper(
                 is_power_save_mode INTEGER,
                 cpu_usage_percent REAL,
                 cpu_load_target_percent REAL,
+                network_downloaded_bytes INTEGER,
+                network_limit_bytes INTEGER,
                 FOREIGN KEY(session_id) REFERENCES battery_session(id) ON DELETE CASCADE
             )
             """.trimIndent()
@@ -155,6 +157,19 @@ class BatteryDbHelper(context: Context) : SQLiteOpenHelper(
         }
     }
 
+    fun deleteSession(sessionId: String): Int {
+        val db = writableDatabase
+        db.beginTransaction()
+        return try {
+            db.delete("battery_sample", "session_id = ?", arrayOf(sessionId))
+            val deleted = db.delete("battery_session", "id = ?", arrayOf(sessionId))
+            db.setTransactionSuccessful()
+            deleted
+        } finally {
+            db.endTransaction()
+        }
+    }
+
     fun closeOpenSessionsAsDestroyed() {
         val now = System.currentTimeMillis()
         val active = getActiveSession() ?: return
@@ -194,6 +209,8 @@ class BatteryDbHelper(context: Context) : SQLiteOpenHelper(
         putNullable("is_power_save_mode", isPowerSaveMode?.let { if (it) 1 else 0 })
         putNullable("cpu_usage_percent", cpuUsagePercent)
         putNullable("cpu_load_target_percent", cpuLoadTargetPercent)
+        putNullable("network_downloaded_bytes", networkDownloadedBytes)
+        putNullable("network_limit_bytes", networkLimitBytes)
     }
 
     private fun BatterySnapshot.toSample(sessionId: String): BatterySample = BatterySample(
@@ -212,7 +229,9 @@ class BatteryDbHelper(context: Context) : SQLiteOpenHelper(
         thermalStatus = thermalStatus,
         isPowerSaveMode = isPowerSaveMode,
         cpuUsagePercent = cpuUsagePercent,
-        cpuLoadTargetPercent = cpuLoadTargetPercent
+        cpuLoadTargetPercent = cpuLoadTargetPercent,
+        networkDownloadedBytes = networkDownloadedBytes,
+        networkLimitBytes = networkLimitBytes
     )
 
     private fun Cursor.toSession(): BatterySession {
@@ -251,7 +270,9 @@ class BatteryDbHelper(context: Context) : SQLiteOpenHelper(
             thermalStatus = nullableInt("thermal_status"),
             isPowerSaveMode = nullableInt("is_power_save_mode")?.let { it == 1 },
             cpuUsagePercent = nullableDouble("cpu_usage_percent"),
-            cpuLoadTargetPercent = nullableDouble("cpu_load_target_percent")
+            cpuLoadTargetPercent = nullableDouble("cpu_load_target_percent"),
+            networkDownloadedBytes = nullableLong("network_downloaded_bytes"),
+            networkLimitBytes = nullableLong("network_limit_bytes")
         )
     }
 
@@ -268,6 +289,6 @@ class BatteryDbHelper(context: Context) : SQLiteOpenHelper(
 
     companion object {
         private const val DATABASE_NAME = "battery_tester.db"
-        private const val DATABASE_VERSION = 2
+        private const val DATABASE_VERSION = 3
     }
 }

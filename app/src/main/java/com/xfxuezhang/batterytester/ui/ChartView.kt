@@ -18,7 +18,8 @@ enum class ChartMetric(val displayName: String, val unit: String) {
     VOLTAGE("电压", "V"),
     POWER("估算功率", "W"),
     CPU_USAGE("CPU 使用率", "%"),
-    CPU_LOAD_TARGET("负载目标", "%")
+    CPU_LOAD_TARGET("负载目标", "%"),
+    NETWORK_DOWNLOADED_MB("网络下载", "MB")
 }
 
 class ChartView @JvmOverloads constructor(
@@ -144,6 +145,7 @@ class ChartView @JvmOverloads constructor(
             ChartMetric.POWER -> Color.rgb(20, 184, 166)
             ChartMetric.CPU_USAGE -> Color.rgb(99, 102, 241)
             ChartMetric.CPU_LOAD_TARGET -> Color.rgb(236, 72, 153)
+            ChartMetric.NETWORK_DOWNLOADED_MB -> Color.rgb(59, 130, 246)
         }
     }
 
@@ -160,6 +162,7 @@ class ChartView @JvmOverloads constructor(
             }
             ChartMetric.CPU_USAGE -> sample.cpuUsagePercent
             ChartMetric.CPU_LOAD_TARGET -> sample.cpuLoadTargetPercent
+            ChartMetric.NETWORK_DOWNLOADED_MB -> sample.networkDownloadedBytes?.let { it / 1024.0 / 1024.0 }
         }
     }
 
@@ -172,6 +175,7 @@ class ChartView @JvmOverloads constructor(
             ChartMetric.POWER -> "%.2f".format(value)
             ChartMetric.CPU_USAGE -> "%.0f%s".format(value, metric.unit)
             ChartMetric.CPU_LOAD_TARGET -> "%.0f%s".format(value, metric.unit)
+            ChartMetric.NETWORK_DOWNLOADED_MB -> "%.1f".format(value)
         }
     }
 }

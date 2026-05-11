@@ -36,5 +36,7 @@ data class BatterySample(
     val thermalStatus: Int?,
     val isPowerSaveMode: Boolean?,
     val cpuUsagePercent: Double?,
-    val cpuLoadTargetPercent: Double?
+    val cpuLoadTargetPercent: Double?,
+    val networkDownloadedBytes: Long?,
+    val networkLimitBytes: Long?
 )

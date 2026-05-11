@@ -15,6 +15,7 @@ class BatteryRepository private constructor(context: Context) {
     fun getSamples(sessionId: String): List<BatterySample> = synchronized(db) { db.getSamples(sessionId) }
     fun getActiveSession(): BatterySession? = synchronized(db) { db.getActiveSession() }
     fun getLatestSample(sessionId: String): BatterySample? = synchronized(db) { db.getLatestSample(sessionId) }
+    fun deleteSession(sessionId: String): Boolean = synchronized(db) { db.deleteSession(sessionId) > 0 }
 
     fun finishSession(sessionId: String, endLevel: Int?, stopReason: StopReason) = synchronized(db) {
         db.finishSession(sessionId, System.currentTimeMillis(), endLevel, stopReason)

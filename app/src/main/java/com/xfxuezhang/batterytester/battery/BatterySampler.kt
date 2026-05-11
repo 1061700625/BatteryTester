@@ -15,7 +15,11 @@ class BatterySampler(private val context: Context) {
     private val powerManager = appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
     private val cpuUsageSampler = CpuUsageSampler()
 
-    fun sample(cpuLoadTargetPercent: Double? = null): BatterySnapshot {
+    fun sample(
+        cpuLoadTargetPercent: Double? = null,
+        networkDownloadedBytes: Long? = null,
+        networkLimitBytes: Long? = null
+    ): BatterySnapshot {
         val intent = appContext.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
 
         val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, INVALID_INT)
@@ -44,7 +48,9 @@ class BatterySampler(private val context: Context) {
             },
             isPowerSaveMode = powerManager.isPowerSaveMode,
             cpuUsagePercent = cpuUsageSampler.samplePercent(),
-            cpuLoadTargetPercent = cpuLoadTargetPercent
+            cpuLoadTargetPercent = cpuLoadTargetPercent,
+            networkDownloadedBytes = networkDownloadedBytes,
+            networkLimitBytes = networkLimitBytes
         )
     }
 

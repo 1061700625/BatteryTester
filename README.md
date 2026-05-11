@@ -4,7 +4,8 @@
 
 **一款面向 Android 设备的充放电曲线记录与电池表现监测工具**
 
-作者：**小锋学长生活大爆炸**
+作者：**小锋学长生活大爆炸**  
+项目地址：https://github.com/1061700625/BatteryTester
 
 ![Android](https://img.shields.io/badge/Android-8.0%2B-brightgreen)
 ![Kotlin](https://img.shields.io/badge/Kotlin-Android-blueviolet)
@@ -20,6 +21,10 @@
 
 
 ## 界面风格
+### 系统状态栏适配
+
+应用会根据 Android `WindowInsets` 自动为顶部状态栏、刘海区域和底部导航栏增加安全间距，避免首页标题、历史页和详情页内容与系统状态栏重叠。
+
 
 当前版本采用更轻量的扁平淡色系界面。首页以浅蓝信息头、低圆角卡片、轻阴影、浅色功能按钮和小标签组成，曲线页使用更淡的网格线与按指标区分的柔和曲线颜色。设计目标是接近电池监测工具常见的信息密度，同时保持测试辅助工具的简洁感。
 
@@ -27,9 +32,11 @@
 
 - **快速放电测试**
   - 用户确认后启动测试。
-  - 使用 CPU 计算负载与屏幕常亮加速耗电。
-  - 根据电池温度和系统热状态自动调整 CPU 负载。
-  - 温度较低时使用约 92% 高负载，避免 100% 满载导致界面刷新卡顿；温度升高后自动降到中/低/冷却负载。
+  - 支持 CPU 计算、GPU 计算、屏幕亮度、网络传输四类放电负载组件。
+  - 默认勾选 CPU 计算、GPU 计算、屏幕亮度，网络传输默认关闭。
+  - 网络传输支持启用前二次确认、自定义下载地址、单选式流量上限和本次已下载流量显示，默认选择“不限制”。
+  - 根据电池温度和系统热状态自动调整 CPU 与网络负载。
+  - 温度较低时 CPU 使用约 92% 高负载，避免 100% 满载导致界面刷新卡顿；温度升高后自动降到中/低/冷却负载。
   - 运行期间保持当前测试页不息屏，便于持续观察曲线。
   - 每秒采样一次电池状态、CPU 使用率和当前负载目标。
   - 通知栏持续显示测试状态。
@@ -88,7 +95,7 @@
 - 用户可以随时停止测试。
 - 温度过高、低电量或系统热状态严重时自动停止。
 
-界面顶部保留作者标识：**小锋学长生活大爆炸**。测试运行期间，前台 Activity 会设置 `FLAG_KEEP_SCREEN_ON`，保持屏幕常亮；放电测试会额外提高屏幕亮度，并根据温度自动调整 CPU 负载。
+界面标题下方分两行展示作者与项目地址，作者为 **小锋学长生活大爆炸**，项目地址为 https://github.com/1061700625/BatteryTester。测试运行期间，前台 Activity 会设置 `FLAG_KEEP_SCREEN_ON`，保持屏幕常亮；放电测试可按用户勾选启用 CPU、GPU、屏幕亮度和网络传输负载。负载组件配置默认折叠，网络传输默认关闭，启用后可能消耗移动流量。
 
 ## 技术栈
 
@@ -102,6 +109,8 @@
 | 本地存储 | SQLiteOpenHelper |
 | 曲线展示 | 自定义 ChartView |
 | CPU 使用率 | `/proc/stat` 差分采样，设备不支持时显示为空 |
+| GPU 负载 | 前台自定义粒子动画 View |
+| 网络传输负载 | `HttpURLConnection` 小数据块循环下载，支持自定义 URL、单选式流量上限和已下载流量显示，默认关闭 |
 | 屏幕常亮 | Activity `FLAG_KEEP_SCREEN_ON` |
 | 异步任务 | Kotlin Coroutines |
 | 导出 | CSV + Android Sharesheet |
@@ -121,13 +130,31 @@ app/src/main/java/com/xfxuezhang/batterytester
 │   └── CsvExporter.kt
 ├── load
 │   ├── CpuBurner.kt
-│   └── CpuUsageSampler.kt
+│   ├── CpuUsageSampler.kt
+│   └── NetworkTransferLoad.kt
 ├── service
 │   └── BatteryTestService.kt
 └── ui
     ├── ChartView.kt
+    ├── GpuLoadView.kt
     └── MainActivity.kt
 ```
+
+
+### 放电负载组件
+
+放电测试前可以展开“放电负载组件”配置区并勾选负载组件。该配置区默认折叠，只显示当前选择摘要。默认勾选 CPU 计算、GPU 计算和屏幕亮度，网络传输默认关闭。
+
+| 组件 | 默认 | 说明 |
+|---|---:|---|
+| CPU 计算 | 开启 | 浮点与混合计算负载，按温度自动降载 |
+| GPU 计算 | 开启 | 前台粒子动画渲染，用于增加图形负载 |
+| 屏幕亮度 | 开启 | 测试页保持常亮并提升到最高亮度 |
+| 网络传输 | 关闭 | 循环下载小数据块，可能消耗移动流量 |
+
+网络传输负载启用前会弹窗确认。用户可以配置下载地址，并通过单选框选择流量上限：不限制、100 MB、500 MB、1 GB 或自定义 MB；默认选择不限制。运行中会显示本次网络负载已下载流量，到达上限后只停止网络传输负载，不停止整次放电测试。
+
+GPU 和屏幕亮度负载只在 App 前台界面生效；CPU 和网络传输由前台服务控制，并根据温度与热状态自动降载或停止。
 
 ## 数据字段
 
@@ -145,6 +172,8 @@ app/src/main/java/com/xfxuezhang/batterytester
 | `thermalStatus` | enum | 系统热状态 |
 | `cpuUsagePercent` | % | CPU 使用率，来自 `/proc/stat` 差分采样 |
 | `cpuLoadTargetPercent` | % | 放电测试当前目标负载比例 |
+| `networkDownloadedBytes` | bytes | 当前测试中网络负载累计下载字节数 |
+| `networkLimitBytes` | bytes | 当前测试中网络负载流量上限，空值表示未限制或未启用 |
 
 CPU 使用率曲线用于观察实际负载效果。负载目标曲线用于观察温控策略如何随温度变化自动调整。
 
@@ -462,3 +491,8 @@ targetSdk = 35
 sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 ```
 
+
+
+## 历史记录管理
+
+历史记录页支持长按单条测试记录进行删除。删除前会弹出确认框，确认后会同时删除该测试会话和对应的采样数据。正在进行中的测试记录不能删除，需要先停止测试。
