@@ -67,11 +67,11 @@
 
 ## 截图
 
-> 当前仓库暂未附带截图。建议后续在 GitHub 仓库中添加以下图片，并放入 `docs/screenshots/` 目录。
-
-| 首页 | 测试中 | 曲线详情 |
-|---|---|---|
-| `docs/screenshots/home.png` | `docs/screenshots/running.png` | `docs/screenshots/detail.png` |
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/d4531e47-265a-4824-b844-010b404296d6" alt="示意图1" width="200"/>
+  <img src="https://github.com/user-attachments/assets/8417fbec-1559-4a5a-a256-bd1720cb557c" alt="示意图2" width="200"/>
+  <img src="https://github.com/user-attachments/assets/edbf0a9d-65cb-47a6-a328-0c0dacf2ea46" alt="示意图3" width="200"/>
+</p>
 
 ## 适用场景
 
